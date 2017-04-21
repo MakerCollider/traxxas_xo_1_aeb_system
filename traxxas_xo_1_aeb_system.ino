@@ -15,17 +15,21 @@
  * included in all copies or substantial portions of the Software.
  */
 
-// #define MEGA2560
+#define MEGA2560
 
 #ifndef MEGA2560
 #include <SoftwareSerial.h>
 #endif
 
+
+/* Arduino实测：8342-8357，8430-8445，8538-8553 */
+/* 信号器实测： 8350-8400，8450-8500，8550-8600  */
 #define FULL_PERIOD 9925      // 控制信号周期
-#define MIN_PERIOD 8240       // 最小高电平时间,代表最大油门
-#define CENTER_PERIOD 8425    // 中位高电平时间,代表最低油门中位
-#define MAX_PERIOD 8731       // 最大高电平时间,代表最大刹车力度
-#define CENTER_OFFSET 25      // 油门中位判定范围
+#define MIN_PERIOD 8340       // 最小高电平时间,代表最大油门
+#define CENTER_PERIOD 8437    // 中位高电平时间,代表油门中位
+#define MAX_PERIOD 8903       // 最大高电平时间,代表最大倒车油门
+#define BREAK_PERIOD 8800     // 刹车力度,用于刹车
+#define CENTER_OFFSET 50      // 油门中位判定范围
 
 #ifndef MEGA2560
 #define SENSOR_A_RX 12
@@ -42,7 +46,7 @@
 #define INPUT_SIGNAL 3        // 油门信号
 #define SIGNAL_SWITCH 4       // 控制信号切换控制
 
-#define AVOID_DISTANCE 700    // 避障距离
+#define AVOID_DISTANCE 800    // 避障距离
 
 enum CarState {
   STOP,
@@ -65,9 +69,11 @@ union SensorData{
   uint8_t data[2];
 };
 
-SensorData sensor_data1, sensor_data2; // 传感器信息
+bool auto_break = false;                    // 自动刹车
 
-unsigned long start_time=0, duration=0; // 运行周期计算
+SensorData sensor_data1, sensor_data2;      // 传感器信息
+
+unsigned long start_time=0, delta_time=0, duration=0;     // 运行周期计算
 
 void setup() {
   Serial.begin(9600);
@@ -82,15 +88,15 @@ void setup() {
   Serial2.begin(9600);
   #endif
 
+  pinMode(INPUT_SIGNAL, INPUT);
+  pinMode(SIGNAL_SWITCH, OUTPUT);
+  digitalWrite(SIGNAL_SWITCH, LOW);
+
   pinMode(OUTPUT_SIGNAL, OUTPUT);
   TCCR1A = _BV(COM1A1) | _BV(COM1B1);
   TCCR1B = _BV(WGM13) | _BV(CS11);
   ICR1 = 10000;
-  OCR1A = CENTER_PERIOD;
-
-  pinMode(INPUT_SIGNAL, INPUT);
-  pinMode(SIGNAL_SWITCH, OUTPUT);
-  digitalWrite(SIGNAL_SWITCH, LOW);
+  OCR1A = BREAK_PERIOD;;
 }
 
 void loop() {
@@ -108,7 +114,7 @@ void loop() {
     // 后退信号
     car_command = BACKWARD;
   } else {
-    // 停车/中位信号
+    // 中位信号
     car_command = STOP;
   }
 
@@ -144,30 +150,39 @@ void loop() {
     sensor_data2.distance = 0;
   }
 
-  if(car_command == STOP) {
-    // 只有在控制器在中位时,才将信号切换回控制器
-    digitalWrite(SIGNAL_SWITCH, LOW);
-  }
-
-  if(car_command == FORWARD) {
-    if(sensor_data1.distance < AVOID_DISTANCE || sensor_data2.distance < AVOID_DISTANCE) {
+  if(sensor_data1.distance < AVOID_DISTANCE || sensor_data2.distance < AVOID_DISTANCE) {
+    if(car_command == FORWARD) {
       // 如果任意一个传感器距离值小于阈值, 则将信号切换至本机,并给予刹车信号
-      OCR1A = MAX_PERIOD-30;
-      digitalWrite(SIGNAL_SWITCH, HIGH);
+      auto_break = true;
+    } else if(car_command == BACKWARD) {
+      auto_break = false;
+    }
+  } else {
+    if(car_command == BACKWARD) {
+      auto_break = false;
     }
   }
 
-  if(car_command != UNCLEAR) {
-    Serial.print("Time: ");
-    Serial.print(micros()-start_time);
-    Serial.print(", \tA: ");
-    Serial.print(sensor_data1.distance);
-    Serial.print(", \tB: ");
-    Serial.print(sensor_data2.distance);
-    Serial.print(", \tlength: ");
-    Serial.print(duration);
-    Serial.print(", \tstate: ");
-    Serial.println(car_command);
+  delta_time = 35000 - micros() + start_time;
+  if(delta_time>0) {
+    // cause of the max time of delayMicroseconds is 16383 */
+    delayMicroseconds(delta_time/2);
+    delayMicroseconds(delta_time/2);
   }
+
+  digitalWrite(SIGNAL_SWITCH, auto_break);
+
+  Serial.print("Time: ");
+  Serial.print(micros()-start_time);
+  Serial.print(", \tA: ");
+  Serial.print(sensor_data1.distance);
+  Serial.print(", \tB: ");
+  Serial.print(sensor_data2.distance);
+  Serial.print(", \tlength: ");
+  Serial.print(duration);
+  Serial.print(", \tstate: ");
+  Serial.print(car_command);
+  Serial.print(", \tbreak: ");
+  Serial.println(auto_break);
 }
 
